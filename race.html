@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>Triathlon Simulator Engine</title>
+    <style>
+        body { margin: 0; padding: 0; background-color: #111116; font-family: 'Malgun Gothic', sans-serif; overflow: hidden; }
+        canvas { display: block; background: #1a1a24; box-shadow: inset 0 0 20px rgba(0,0,0,0.8); }
+        
+        /* 마우스 호버 시 나타나는 선수 정보 창 */
+        #tooltip {
+            position: absolute;
+            background: rgba(20, 20, 30, 0.95);
+            color: #fff;
+            padding: 12px;
+            border-radius: 8px;
+            font-size: 12px;
+            display: none;
+            pointer-events: none;
+            border: 1px solid #4f46e5;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+            z-index: 1000;
+            line-height: 1.5;
+            min-width: 160px;
+        }
+        
+        /* 상단 종목 레이블 */
+        .stage-label {
+            position: absolute;
+            top: 15px;
+            font-weight: bold;
+            font-size: 14px;
+            color: rgba(255,255,255,0.8);
+            background: rgba(0,0,0,0.6);
+            padding: 6px 14px;
+            border-radius: 20px;
+            pointer-events: none;
+            letter-spacing: 1px;
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+    </style>
+</head>
+<body>
+
+    <!-- 3개 종목 영역 레이블 -->
+    <div class="stage-label" style="left: 2%;">🏊‍♂️ 1구간: 수영 (Swim)</div>
+    <div class="stage-label" style="left: 36%;">🚴‍♂️ 2구간: 사이클 (Cycle)</div>
+    <div class="stage-label" style="left: 70%;">🏃‍♂️ 3구간: 마라톤 (Run)</div>
+
+    <!-- 정보 표시 툴팁 엘리먼트 -->
+    <div id="tooltip"></div>
+    <canvas id="raceCanvas"></canvas>
+
+    <script>
+        const canvas = document.getElementById('raceCanvas');
+        const ctx = canvas.getContext('2d');
+        const tooltip = document.getElementById('tooltip');
+
+        // 파이썬 app.py에서 치환되어 동적으로 들어오는 설정 변수
+        const DOT_COUNT = 2000;
+        const SPEED_MULTIPLIER = __GAME_SPEED__;
+        const VARIANCE_FACTOR = __SKILL_GAP__;
+        
+        let athletes = [];
+        let hoveredAthlete = null;
+        let frameCount = 0;
+
+        // 캔버스 크기를 브라우저 창 크기에 맞춤
+        function resizeCanvas() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight * 0.85;
+        }
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
+
+        // 종목 경계선 X 좌표 초기 정의
+        let zone1_end = canvas.width * 0.33;
+        let zone2_end = canvas.width * 0.66;
+
+        // 2000명의 선수 고유 기량 및 물리 스탯 초기 생성
+        for (let i = 1; i <= DOT_COUNT; i++) {
+            const baseSkill = 0.4 + Math.random() * VARIANCE_FACTOR;
+            athletes.push({
+                id: i,
+                name: "선수 #" + i,
+                x: Math.random() * 50 - 60, // 출발선 뒤쪽 무작위 대기 위치
+                y: 50 + Math.random() * (canvas.height - 100),
+                radius: 2.5,
+                
+                // 각 종목별로 개별 부여되는 고유 속도
+                swimSpeed: (0.3 + Math.random() * 0.3) * baseSkill * SPEED_MULTIPLIER,
+                cycleSpeed: (1.3 + Math.random() * 0.5) * baseSkill * SPEED_MULTIPLIER,
+                runSpeed: (0.7 + Math.random() * 0.4) * baseSkill * SPEED_MULTIPLIER,
+                
+                stage: 'swim', 
+                color: '#38bdf8', 
+                distance: 0, 
+                rank: i,
+                swimTime: null,
+                cycleTime: null,
+                finishTime: null
+            });
+        }
+
+        // 실시간 그래픽 렌더링 및 애니메이션 루프 함수
+        function animate() {
+            frameCount++;
+            
+            // 매 프레임마다 화면을 지우고 다시 그리기
+            ctx.fillStyle = '#111116';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            zone1_end = canvas.width * 0.33;
+            zone2_end = canvas.width * 0.66;
+
+            // 3구역 시각적 배경 색상 주입
+            ctx.fillStyle = 'rgba(56, 189, 248, 0.03)'; ctx.fillRect(0, 0, zone1_end, canvas.height);
+            ctx.fillStyle = 'rgba(234, 179, 8, 0.02)'; ctx.fillRect(zone1_end, 0, zone2_end - zone1_end, canvas.height);
+            ctx.fillStyle = 'rgba(239, 68, 68, 0.02)'; ctx.fillRect(zone2_end, 0, canvas.width - zone2_end, canvas.height);
+
+            // 구역 구분용 세로 점선 그리기
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.08)';
+            ctx.lineWidth = 1;
+            ctx.setLineDash();
+            ctx.beginPath(); ctx.moveTo(zone1_end, 0); ctx.lineTo(zone1_end, canvas.height); ctx.stroke();
+            ctx.beginPath(); ctx.moveTo(zone2_end, 0); ctx.lineTo(zone2_end, canvas.height); ctx.stroke();
+            ctx.setLineDash([]); 
+
+            // 선수 위치 업데이트 및 구간 교체 연산
+            for (let i = 0; i < DOT_COUNT; i++) {
+                let p = athletes[i];
+                
+                if (p.stage === 'swim') {
+                    p.x += p.swimSpeed;
+                    p.y += (Math.sin(frameCount * 0.04 + p.id) * 0.15); // 수영 출렁임 구현
+                    p.color = '#38bdf8'; 
+                    if (p.x >= zone1_end) { p.stage = 'cycle'; p.swimTime = (frameCount / 60).toFixed(1) + "초"; }
+                } else if (p.stage === 'cycle') {
+                    p.x += p.cycleSpeed; 
+                    p.color = '#eab308'; 
+                    if (p.x >= zone2_end) { p.stage = 'run'; p.cycleTime = (frameCount / 60).toFixed(1) + "초"; }
+                } else if (p.stage === 'run') {
+                    p.x += p.runSpeed; 
+                    p.color = '#ef4444'; 
+                    if (p.x >= canvas.width - 15) { p.stage = 'goal'; p.finishTime = (frameCount / 60).toFixed(1) + "초"; p.x = canvas.width - 8; }
+                } else if (p.stage === 'goal') {
+                    p.color = '#22c55e'; // 완주 상태는 초록색 고정
+                }
+                p.distance = p.x; // 순위 연산의 기준이 되는 총 전진 거리
+            }
+
+            // 실시간 순위 리더보드 계산 (브라우저 과부하 방지를 위해 15프레임 주기 진행)
+            if (frameCount % 15 === 0) {
+                let sorted = [...athletes].sort((a, b) => b.distance - a.distance);
+                for (let r = 0; r < sorted.length; r++) { 
+                    athletes[sorted[r].id - 1].rank = r + 1; 
+                }
+                // 스트림릿 부모 영역으로 탑5 정보 갱신 호출
+                updateSidebarLeaderboard(sorted.slice(0, 5));
+            }
+
+            // 선수 도트 그리기 및 호버 하이라이트 효과 적용
+            for (let i = 0; i < DOT_COUNT; i++) {
+                let p = athletes[i];
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
+                ctx.fillStyle = p.color;
+                
+                if (hoveredAthlete && hoveredAthlete.id === p.id) {
+                    ctx.arc(p.x, p.y, p.radius + 3, 0, Math.PI * 2);
+                    ctx.fillStyle = '#ffffff';
+                    ctx.shadowBlur = 12; 
+                    ctx.shadowColor = '#ffffff';
+                }
+                ctx.fill(); 
+                ctx.shadowBlur = 0; // 그림자 속성 초기화
+            }
+
+            // 마우스 포인터가 올라간 타겟 선수의 실시간 툴팁 데이터 업데이트
+            if (hoveredAthlete) {
+                let cur = athletes[hoveredAthlete.id - 1];
+                let stageKo = cur.stage === 'swim' ? '🏊‍♂️ 수영' : cur.stage === 'cycle' ? '🚴‍♂️ 사이클' : cur.stage === 'run' ? '🏃‍♂️ 마라톤' : '🏁 완주!';
+                tooltip.innerHTML = `
+                    <strong style="font-size:13px; color:#67e8f9;">${cur.name}</strong><br/>
+                    <b style="color:#facc15; font-size:13px;">현재 순위: ${cur.rank}위</b><br/>
+                    <div style="border-top:1px solid #334155; margin:5px 0;"></div>
+                    현재 종목: ${stageKo}<br/>
+                    🏊‍♂️ 수영 기록: ${cur.swimTime || '레이스 중'}<br/>
+                    🚴‍♂️ 사이클 기록: ${cur.cycleTime || (cur.stage === 'swim' ? '대기 중' : '레이스 중')}<br/>
+                    🏁 최종 기록: ${cur.finishTime || '진행 중'}
+                `;
+            }
+            
+            requestAnimationFrame(animate);
+        }
+
+        // 스트림릿 사이드바 리더보드 컴포넌트에 탑5 데이터 렌더링 (보안 안전 우회형)
+        function updateSidebarLeaderboard(top5) {
+            try {
+                const leaderboardDiv = window.parent.document.getElementById('live-leaderboard');
+                if (leaderboardDiv) {
+                    let html = '<div style="font-weight:bold; margin-bottom:8px; color:#a7f3d0;">⚡ REAL-TIME TOP 5</div>';
+                    top5.forEach((p, idx) => {
+                        let icon = p.stage === 'swim' ? '🏊‍♂️' : p.stage === 'cycle' ? '🚴‍♂️' : p.stage === 'run' ? '🏃‍♂️' : '🏁';
+                        html += `<div style="margin: 4px 0; display:flex; justify-content:space-between;">
+                            <span><b>${idx+1}위</b> ${p.name}</span>
+                            <span>${icon}</span>
+                         </div>`;
+                    });
+                    leaderboardDiv.innerHTML = html;
+                }
+            } catch (e) {
+                // 특정 브라우저 환경에서 Cross-Origin 보안 차단이 발동되어도 화면 멈춤 없이 우회 처리
+                console.log("레이스 중... (사이드바 통신 우회)");
+            }
+        }
+
+        // 마우스 커서와 선수 도트 간의 충돌 레이더 감지 센서 (addEventListener)
+        canvas.addEventListener('mousemove', function(e) {
+            const rect = canvas.getBoundingClientRect();
+            const mouseX = e.clientX - rect.left;
+            const mouseY = e.clientY - rect.top;
+            let found = null;
+            
+            for (let i = DOT_COUNT - 1; i >= 0; i--) {
+                let p = athletes[i];
+                if (Math.hypot(p.x - mouseX, p.y - mouseY) < p.radius + 5) { 
+                    found = p; 
+                    break; 
+                }
+            }
+            
+            if (found) {
+                hoveredAthlete = found; 
+                tooltip.style.display = 'block';
+                tooltip.style.left = (e.clientX + 15) + 'px'; 
+                tooltip.style.top = (e.clientY + 15) + 'px';
+            } else { 
+                hoveredAthlete = null; 
+                tooltip.style.display = 'none'; 
+            }
+        });
+
+        // 엔진 가동
