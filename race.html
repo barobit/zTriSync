@@ -4,124 +4,132 @@
     <meta charset="UTF-8">
     <title>실시간 현실 고증 그래픽 엔진</title>
     <style>
+        /* 기본 화면 레이아웃 설정 */
         body { margin: 0; padding: 0; background: #111116; font-family: sans-serif; overflow: hidden; display: flex; align-items: flex-start; }
-        
-        /* 1. 왼쪽 70% 영역: 경기 트랙 가로폭 확장 */
-        .canvas-container { position: relative; width: 70%; }
+        .canvas-container { position: relative; width: 70%; } /* 왼쪽 70% 경기 트랙 영역 */
         canvas { display: block; background: #1a1a24; border-radius: 8px; width: 100%; height: 240px; }
         
-        /* 2. 오른쪽 25% 영역: 가로폭을 축소하여 더욱 슬림해진 독립 순위창 */
-        #live-box {
-            width: 25%; margin-left: 2%; background: rgba(26, 26, 36, 0.95);
-            padding: 15px; border-radius: 8px; color: #fff; font-size: 12px; height: 210px;
-            border: 1px solid #4f46e5; box-shadow: 0 4px 15px rgba(0,0,0,0.5); line-height: 1.8;
-            box-sizing: border-box; /* 패딩이 박스 너비를 침범하지 않도록 고정 */
-        }
+        /* 오른쪽 25% 실시간 순위판 패널 */
+        #live-box { width: 25%; margin-left: 2%; background: rgba(26,26,36,0.95); padding: 15px; border-radius: 8px; color: #fff; font-size: 12px; height: 210px; border: 1px solid #4f46e5; box-shadow: 0 4px 15px rgba(0,0,0,0.5); line-height: 1.8; box-sizing: border-box; }
+        #tooltip { position: absolute; background: rgba(20,20,30,0.95); color: #fff; padding: 10px; border-radius: 6px; font-size: 11px; display: none; pointer-events: none; border: 1px solid #4f46e5; min-width: 170px; line-height: 1.5; z-index: 10; }
+        .stage-label { position: absolute; top: 10px; font-weight: bold; font-size: 11px; color: #fff; background: rgba(0,0,0,0.6); padding: 4px 10px; border-radius: 12px; transform: translateX(-50%); }
         
-        #tooltip {
-            position: absolute; background: rgba(20, 20, 30, 0.95); color: #fff;
-            padding: 10px; border-radius: 6px; font-size: 11px; display: none;
-            pointer-events: none; border: 1px solid #4f46e5; min-width: 170px; line-height: 1.5; z-index: 10;
-        }
-        
-        /* 왼쪽 트랙 영역 가로폭 70% 가이드라인에 맞춰 중심점 비율 보정 */
-        .stage-label {
-            position: absolute; top: 10px; font-weight: bold; font-size: 11px;
-            color: #fff; background: rgba(0,0,0,0.6); padding: 4px 10px; border-radius: 12px;
-            transform: translateX(-50%);
-        }
+        /* 순위판 내부의 종목별 동그란 네온 뱃지 아이콘 스타일 */
+        .live-icon { font-size: 15px; display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 50%; background: rgba(255,255,255,0.08); }
+        .i-swim { background: rgba(56,189,248,0.25); border: 1px solid #38bdf8; box-shadow: 0 0 8px #38bdf8; } /* 수영 (하늘색 네온) */
+        .i-cycle { background: rgba(234,179,8,0.25); border: 1px solid #eab308; box-shadow: 0 0 8px #eab308; } /* 사이클 (노란색 네온) */
+        .i-run { background: rgba(239,68,68,0.25); border: 1px solid #ef4444; box-shadow: 0 0 8px #ef4444; } /* 마라톤 (빨간색 네온) */
+        .i-goal { background: rgba(34,197,94,0.3); border: 1px solid #22c55e; box-shadow: 0 0 10px #22c55e; } /* 완주 (연두색 네온) */
     </style>
 </head>
 <body>
-
     <div class="canvas-container">
-        <!-- 3등분 박스 내부 33.3% 비중의 중심 좌표로 정밀 정렬 -->
-        <div class="stage-label" style="left: 16.6%;">🏊‍♂️ 수영 (1.5km)</div>
-        <div class="stage-label" style="left: 50%;">🚴‍♂️ 사이클 (40km)</div>
-        <div class="stage-label" style="left: 83.3%;">🏃‍♂️ 마라톤 (10km)</div>
+        <div class="stage-label" style="left: 16.5%;">🏊‍♂️ 수영</div>
+        <div class="stage-label" style="left: 49.5%;">🚴‍♂️ 사이클</div>
+        <div class="stage-label" style="left: 82.5%;">🏃‍♂️ 마라톤</div>
+        <div class="stage-label" style="left: 99.5%; color: #22c55e; border: 1px solid #22c55e; transform: translateX(-100%); padding: 4px 6px;">🏁 완주</div>
         <canvas id="raceCanvas"></canvas>
     </div>
-
-    <!-- 더욱 컴팩트해진 실제 순위판 패널 -->
     <div id="live-box"></div>
     <div id="tooltip"></div>
-
     <script>
         const canvas = document.getElementById('raceCanvas');
         const ctx = canvas.getContext('2d');
         const tooltip = document.getElementById('tooltip');
         const liveBox = document.getElementById('live-box');
-        const DOT_COUNT = 2000, SPEED_MULTIPLIER = __SPEED_VAL__, VARIANCE_FACTOR = __GAP_VAL__, INTERVAL_SECONDS = __INTERVAL_VAL__;
-        let athletes = [], hoveredAthlete = null, frameCount = 0;
         
-        function resize() { 
-            canvas.width = canvas.parentElement.clientWidth; 
-            canvas.height = 240; 
+        // 파이썬 슬라이더 변수 치환 설정
+        const DOT_COUNT = 2000, SPEED_MULTIPLIER = __SPEED_VAL__, VARIANCE_FACTOR = __GAP_VAL__, INTERVAL_SECONDS = __INTERVAL_VAL__;
+        let athletes = [], hoveredAthlete = null, frameCount = 0, z1 = 0, z2 = 0, z3 = 0;
+        
+        // [잔상 제거 핵심] 브라우저 창 크기가 조절될 때 그래픽 버퍼와 구역 좌표를 완전히 청소하는 함수
+        function resize() {
+            const w = canvas.parentElement.clientWidth;
+            canvas.width = w; canvas.height = 240;
+            
+            // 수영, 사이클, 마라톤을 33.16%씩 할당하고 완주는 끝단 0.5% 초슬림 고정
+            z1 = w * 0.3316; z2 = w * 0.6632; z3 = w * 0.995;
+            ctx.clearRect(0, 0, w, 240); // 드로잉 메모리 리셋
         }
         resize();
         window.addEventListener('resize', resize);
         
-        let z1 = canvas.width * 0.333, z2 = canvas.width * 0.666;
-        
+        // 2,000명 선수 데이터 세팅 루프
         for (let i = 1; i <= DOT_COUNT; i++) {
-            const skill = 0.4 + Math.random() * VARIANCE_FACTOR;
+            const sk = 0.4 + Math.random() * VARIANCE_FACTOR; // 랜덤 기량 격차
             athletes.push({
                 id: i, name: "#" + i, x: Math.random() * 20 - 30, y: 35 + Math.random() * (canvas.height - 70), radius: 2.2,
-                sp1: (0.08 + Math.random() * 0.08) * skill * SPEED_MULTIPLIER,
-                sp2: (0.8 + Math.random() * 0.3) * skill * SPEED_MULTIPLIER,
-                sp3: (0.25 + Math.random() * 0.15) * skill * SPEED_MULTIPLIER,
+                sp1: (0.06 + Math.random() * 0.06) * sk * SPEED_MULTIPLIER, // 수영 속도
+                sp2: (0.6 + Math.random() * 0.2) * sk * SPEED_MULTIPLIER,   // 사이클 속도
+                sp3: (0.18 + Math.random() * 0.12) * sk * SPEED_MULTIPLIER, // 마라톤 속도
                 stage: 'ready', color: 'rgba(255,255,255,0.2)', rank: i, startFrame: Math.floor((i - 1) / 10) * (INTERVAL_SECONDS * 60),
                 actualStart: null, swimEnd: null, cycleEnd: null, goalEnd: null, raceScore: -999999
             });
         }
-
+        // 실시간 화면 연산 및 렌더링을 수행하는 주 애니메이션 루프
         function animate() {
-            frameCount += SPEED_MULTIPLIER;
+            ctx.clearRect(0, 0, canvas.width, canvas.height); frameCount += SPEED_MULTIPLIER;
             ctx.fillStyle = '#111116'; ctx.fillRect(0, 0, canvas.width, canvas.height);
-            z1 = canvas.width * 0.333; z2 = canvas.width * 0.666;
             
+            // 구역별 배경 알파 레이어 칠하기
             ctx.fillStyle = 'rgba(56,189,248,0.03)'; ctx.fillRect(0, 0, z1, canvas.height);
             ctx.fillStyle = 'rgba(234,179,8,0.02)'; ctx.fillRect(z1, 0, z2 - z1, canvas.height);
-            ctx.fillStyle = 'rgba(239,68,68,0.02)'; ctx.fillRect(z2, 0, canvas.width - z2, canvas.height);
+            ctx.fillStyle = 'rgba(239,68,68,0.02)'; ctx.fillRect(z2, 0, z3 - z2, canvas.height);
+            ctx.fillStyle = 'rgba(34,197,94,0.08)'; ctx.fillRect(z3, 0, canvas.width - z3, canvas.height);
             
+            // 경계 트랙 세로 구분선 그리기
             ctx.strokeStyle = 'rgba(255,255,255,0.08)'; ctx.lineWidth = 1;
             ctx.beginPath(); ctx.moveTo(z1, 0); ctx.lineTo(z1, canvas.height); ctx.stroke();
             ctx.beginPath(); ctx.moveTo(z2, 0); ctx.lineTo(z2, canvas.height); ctx.stroke();
+            ctx.strokeStyle = 'rgba(34,197,94,0.5)'; ctx.beginPath(); ctx.moveTo(z3, 0); ctx.lineTo(z3, canvas.height); ctx.stroke();
             
+            // 2,000명 선수 개별 물리 이동 연산
             for (let i = 0; i < DOT_COUNT; i++) {
                 let p = athletes[i];
                 if (p.stage === 'ready' && frameCount >= p.startFrame) { p.stage = 'swim'; p.x = 0; p.actualStart = frameCount; }
                 
                 if (p.stage === 'swim') {
-                    p.x += p.sp1; p.y += Math.sin(frameCount * 0.05 + p.id) * 0.12; p.color = '#38bdf8'; p.curFrame = frameCount - p.actualStart;
+                    p.x += p.sp1; p.y += Math.sin(frameCount * 0.05 + p.id) * 0.12; p.color = '#38bdf8';
                     if (p.x >= z1) { p.stage = 'cycle'; p.swimEnd = frameCount; }
                 } else if (p.stage === 'cycle') {
-                    p.x += p.sp2; p.color = '#eab308'; p.curFrame = frameCount - p.swimEnd;
+                    p.x += p.sp2; p.color = '#eab308';
                     if (p.x >= z2) { p.stage = 'run'; p.cycleEnd = frameCount; }
                 } else if (p.stage === 'run') {
-                    p.x += p.sp3; p.color = '#ef4444'; p.curFrame = frameCount - p.cycleEnd;
-                    if (p.x >= canvas.width - 15) { p.stage = 'goal'; p.goalEnd = frameCount; p.x = canvas.width - 8; }
-                } else if (p.stage === 'goal') { p.color = '#22c55e'; }
+                    p.x += p.sp3; p.color = '#ef4444';
+                    if (p.x >= z3) { p.stage = 'goal'; p.goalEnd = frameCount; }
+                } else if (p.stage === 'goal') { 
+                    p.color = '#22c55e'; // 완주 성공 연두색
+                    let tx = z3 + 1 + (p.id % 5) * ((canvas.width - z3 - 2) / 5); // 0.5% 슬림 골인선 정렬
+                    if (p.x < tx) { p.x += 1; } else { p.x = tx; }
+                }
 
                 if (p.stage === 'ready') { p.raceScore = -999999 + p.id; }
                 else if (p.stage === 'goal') { p.raceScore = 10000000 - (p.goalEnd - p.actualStart); }
                 else {
-                    let duration = frameCount - p.actualStart; if (duration <= 0) duration = 1;
-                    p.raceScore = (p.x / duration) * 100000 + (p.stage === 'run' ? 500000 : p.stage === 'cycle' ? 200000 : 0);
+                    let du = frameCount - p.actualStart; if (du <= 0) du = 1;
+                    p.raceScore = (p.x / du) * 100000 + (p.stage === 'run' ? 500000 : p.stage === 'cycle' ? 200000 : 0);
                 }
             }
 
+            // 실시간 주행 페이스 순위 정렬
             let sorted = [...athletes].sort((a, b) => b.raceScore - a.raceScore);
             for (let r = 0; r < sorted.length; r++) { athletes[sorted[r].id - 1].rank = r + 1; }
             
-            let html = '<b style="color:#a7f3d0; font-size:13px;">🏆 실시간 순위 (넷타임)</b><hr style="border:0; border-top:1px solid #334155; margin:6px 0;">';
+            // 우측 상위 5인 실시간 순위판 출력
+            let html = '<b style="color:#a7f3d0;font-size:13px;">🏆 실시간 순위</b><hr style="border:0;border-top:1px solid #334155;margin:6px 0;">';
             sorted.slice(0, 5).forEach((p, idx) => {
-                let icon = p.stage==='swim'?'🏊‍♂️':p.stage==='cycle'?'🚴‍♂️':p.stage==='run'?'🏃‍♂️':p.stage==='goal'?'🏁':'⏱️';
+                let ic = '⏱️', icl = 'live-icon';
+                if (p.stage === 'swim') { ic = '🏊‍♂️'; icl += ' i-swim'; }
+                else if (p.stage === 'cycle') { ic = '🚴‍♂️'; icl += ' i-cycle'; }
+                else if (p.stage === 'run') { ic = '🏃‍♂️'; icl += ' i-run'; }
+                else if (p.stage === 'goal') { ic = '🏁'; icl += ' i-goal'; }
+                
                 let net = p.actualStart ? (((p.goalEnd ? p.goalEnd : frameCount) - p.actualStart) / 60).toFixed(2) + "초" : "대기";
-                html += `<div style="display:flex; justify-content:space-between; margin-bottom:5px;"><span><b>${idx+1}위</b> 선수 ${p.name} (${net})</span><span>${icon}</span></div>`;
+                html += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;"><span><b>' + (idx+1) + '위</b> 선수 ' + p.name + ' (' + net + ')</span><span class="' + icl + '">' + ic + '</span></div>';
             });
             liveBox.innerHTML = html;
 
+            // 캔버스 도화지에 선수들 그리기
             for (let i = 0; i < DOT_COUNT; i++) {
                 let p = athletes[i]; ctx.beginPath();
                 if (hoveredAthlete && hoveredAthlete.id === p.id) { ctx.arc(p.x, p.y, p.radius + 2, 0, Math.PI * 2); ctx.fillStyle = '#fff'; }
@@ -129,43 +137,29 @@
                 ctx.fill();
             }
 
+            // 마우스 호버 타겟 상세 툴팁 출력
             if (hoveredAthlete) {
-                let cur = athletes[hoveredAthlete.id - 1], sTime = "대기", cTime = "대기", mTime = "대기", totalTime = "대기";
+                let cur = athletes[hoveredAthlete.id - 1], s = "대기", c = "대기", m = "대기", t = "대기";
                 if (cur.actualStart !== null) {
-                    let sFrames = (cur.swimEnd ? cur.swimEnd : frameCount) - cur.actualStart; sTime = (sFrames / 60).toFixed(2) + "초" + (cur.swimEnd ? "" : " ⏳");
-                    if (cur.swimEnd !== null) { let cFrames = (cur.cycleEnd ? cur.cycleEnd : frameCount) - cur.swimEnd; cTime = (cFrames / 60).toFixed(2) + "초" + (cur.cycleEnd ? "" : " ⏳"); }
-                    if (cur.cycleEnd !== null) { let mFrames = (cur.goalEnd ? cur.goalEnd : frameCount) - cur.cycleEnd; mTime = (mFrames / 60).toFixed(2) + "초" + (cur.goalEnd ? "" : " ⏳"); }
-                    let totalFrames = (cur.goalEnd ? cur.goalEnd : frameCount) - cur.actualStart; totalTime = (totalFrames / 60).toFixed(2) + "초" + (cur.goalEnd ? " 🏁" : " 🏃‍♂️");
+                    let sf = (cur.swimEnd ? cur.swimEnd : frameCount) - cur.actualStart; s = (sf / 60).toFixed(2) + "초";
+                    if (cur.swimEnd !== null) { let cf = (cur.cycleEnd ? cur.cycleEnd : frameCount) - cur.swimEnd; c = (cf / 60).toFixed(2) + "초"; }
+                    if (cur.cycleEnd !== null) { let mf = (cur.goalEnd ? cur.goalEnd : frameCount) - cur.cycleEnd; m = (mf / 60).toFixed(2) + "초"; }
+                    let tf = (cur.goalEnd ? cur.goalEnd : frameCount) - cur.actualStart; t = (tf / 60).toFixed(2) + "초";
                 }
-                tooltip.innerHTML = `
-                    <strong>선수 ${cur.name} (${cur.stage === 'ready' ? '대기중' : cur.rank + '위'})</strong><br>
-                    <hr style="border:0; border-top:1px solid #334155; margin:4px 0;">
-                    상태: ${cur.stage==='ready'?'출발대기':cur.stage==='swim'?'수영중':cur.stage==='cycle'?'사이클중':cur.stage==='run'?'마라톤중':'완주!'}<br>
-                    <span style="color:#38bdf8;">🏊‍♂️ 수영: ${sTime}</span><br>
-                    <span style="color:#eab308;">🚴‍♂️ 사이클: ${cTime}</span><br>
-                    <span style="color:#ef4444;">🏃‍♂️ 마라톤: ${mTime}</span><br>
-                    <hr style="border:0; border-top:1px dashed #334155; margin:5px 0;">
-                    🏁 누적 넷타임: <b>${totalTime}</b>
-                `;
+                tooltip.innerHTML = '<strong>선수 ' + cur.name + ' (' + (cur.stage === 'ready' ? '대기' : cur.rank + '위') + ')</strong><br>⏱️ 총 시간: ' + t + '<br>🏊‍♂️ 수영: ' + s + '<br>🚴‍♂️ 사이클: ' + c + '<br>🏃‍♂️ 마라톤: ' + m;
             }
             requestAnimationFrame(animate);
         }
-
-        canvas.addEventListener('mousemove', function(e) {
-            const rect = canvas.getBoundingClientRect(), mx = e.clientX - rect.left, my = e.clientY - rect.top;
-            let found = null;
-            for (let i = DOT_COUNT - 1; i >= 0; i--) {
-                let p = athletes[i]; if (p.stage === 'ready') continue;
-                if (Math.hypot(p.x - mx, p.y - my) < p.radius + 4) { found = p; break; }
-            }
-            if (found) {
-                hoveredAthlete = found; tooltip.style.display = 'block';
-                tooltip.style.left = (e.clientX + 15) + 'px'; tooltip.style.top = (e.clientY + 15) + 'px';
-            } else { hoveredAthlete = null; tooltip.style.display = 'none'; }
-        });
-
-        canvas.addEventListener('mouseleave', function() { hoveredAthlete = null; tooltip.style.display = 'none'; });
         animate();
+
+        // 마우스 탐색 이벤트 감지 좌표 핸들러
+        canvas.addEventListener('mousemove', (e) => {
+            const rect = canvas.getBoundingClientRect(), mx = e.clientX - rect.left, my = e.clientY - rect.top; let found = null;
+            for (let i = 0; i < DOT_COUNT; i++) { let p = athletes[i], dist = Math.hypot(p.x - mx, p.y - my); if (dist < p.radius + 5) { found = p; break; } }
+            if (found) { hoveredAthlete = found; tooltip.style.left = (e.clientX + 15) + 'px'; tooltip.style.top = (e.clientY + 15) + 'px'; tooltip.style.display = 'block'; }
+            else { hoveredAthlete = null; tooltip.style.display = 'none'; }
+        });
+        canvas.addEventListener('mouseleave', () => { hoveredAthlete = null; tooltip.style.display = 'none'; });
     </script>
 </body>
 </html>
